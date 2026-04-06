@@ -1,9 +1,9 @@
 // ================================================================
-// Buderus Monitor Card v0.0.7
+// Buderus Monitor Card v0.0.8
 // Full EMS-ESP integration · mini-graph-card · Visual Editor
 // ================================================================
 
-const BMC_VERSION = "0.0.7";
+const BMC_VERSION = "0.0.8";
 
 /* ── Default Entity Map ───────────────────────────────────────── */
 const BMC_ENTITY_DEFAULTS = {
