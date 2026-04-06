@@ -1,5 +1,5 @@
 // ================================================================
-// Buderus Pro Monitor Card v0.0.5
+// Buderus Monitor Card v0.0.5
 // Full EMS-ESP integration · mini-graph-card · Visual Editor
 // ================================================================
 
