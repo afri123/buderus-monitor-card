@@ -1,9 +1,9 @@
 // ================================================================
-// Buderus Pro Monitor Card v0.0.3
+// Buderus Pro Monitor Card v0.0.4
 // Based on v0.0.2 · Anti-Flicker · Pro Editor · Mini-Graph-Integration
 // ================================================================
 
-const BMC_VERSION = "0.0.3";
+const BMC_VERSION = "0.0.4";
 
 /* ── Deine bewährte Entitäten-Liste ───────────────────────────── */
 const BMC_ENTITY_DEFAULTS = {
