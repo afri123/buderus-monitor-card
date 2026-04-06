@@ -1,0 +1,6 @@
+{
+  "name": "Buderus Monitor Card",
+  "render_readme": true,
+  "filename": "buderus-monitor-card.js",
+  "iot_class": "Local Push"
+}
