@@ -467,10 +467,41 @@ class BuderusMonitorCard extends HTMLElement {
     if (this._hass) this._fullRender();
   }
 
-  set hass(hass) {
-    this._hass = hass;
+set hass(hass) {
+  this._hass = hass;
+
+  if (!this._built) {
     this._fullRender();
+    this._built = true;
+  } else {
+    this._updateValuesOnly();
   }
+}
+
+  _updateValuesOnly() {
+  // Nur Werte aktualisieren statt DOM neu bauen
+  this.shadowRoot.querySelectorAll(".metric-box").forEach(box => {
+    const valEl = box.querySelector(".m-value");
+    const labelEl = box.querySelector(".m-label");
+    if (!valEl || !labelEl) return;
+
+    const label = labelEl.textContent;
+    const key = Object.keys(BMC_LABELS).find(k => BMC_LABELS[k] === label);
+    if (!key) return;
+
+    const eid = this._config.entities[key];
+    const sv = _sv(this._hass, eid);
+
+    if (eid?.startsWith("binary_sensor.")) {
+      valEl.textContent = sv.s === "on" ? "An" : "Aus";
+      valEl.classList.toggle("binary-on", sv.s === "on");
+      valEl.classList.toggle("binary-off", sv.s !== "on");
+    } else {
+      valEl.textContent = _fmt(sv.v, sv.u);
+    }
+  });
+}
+
 
   _fullRender() {
     if (!this._config || !this._hass) return;
@@ -527,7 +558,7 @@ class BuderusMonitorCard extends HTMLElement {
         background: ${s.card_bg};
         border-radius: ${s.card_radius};
         padding: ${s.card_padding};
-        font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+        font-family: var(--primary-font-family);
         color: var(--primary-text-color, #e0e0e0);
         position: relative;
         overflow: hidden;
@@ -553,7 +584,7 @@ class BuderusMonitorCard extends HTMLElement {
       .status-pill {
         display: inline-flex; align-items: center; gap: 6px;
         padding: 5px 14px; border-radius: 20px; font-size: 0.72rem;
-        font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
+        font-weight: 700; text-transform: none; letter-spacing: 0.8px;
         background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
       }
       .status-dot {
@@ -571,7 +602,7 @@ class BuderusMonitorCard extends HTMLElement {
       .tab-btn {
         flex-shrink: 0; display: flex; align-items: center; gap: 5px;
         padding: 7px 14px; border: none; border-radius: 10px; cursor: pointer;
-        font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        font-size: 0.72rem; font-weight: 700; text-transform: none; letter-spacing: 0.5px;
         background: rgba(255,255,255,0.04); color: var(--secondary-text-color, #999);
         transition: all 0.25s ease; white-space: nowrap;
       }
@@ -604,7 +635,7 @@ class BuderusMonitorCard extends HTMLElement {
       .metric-box.has-graph { min-height: 130px; }
 
       .m-label {
-        font-size: ${s.metric_label_size}; text-transform: uppercase;
+        font-size: ${s.metric_label_size}; text-transform: none;
         color: var(--secondary-text-color, #888);
         font-weight: 800; letter-spacing: 0.7px; margin-bottom: 6px; z-index: 1;
       }
@@ -633,7 +664,7 @@ class BuderusMonitorCard extends HTMLElement {
         background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.04);
       }
       .cop-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
-      .cop-label { font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: var(--secondary-text-color); }
+      .cop-label { font-size: 0.75rem; font-weight: 800; text-transform: none; letter-spacing: 0.7px; color: var(--secondary-text-color); }
       .cop-value { font-size: 1.3rem; font-weight: 900; color: ${s.accent}; }
       .cop-track { height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
       .cop-fill { height: 100%; border-radius: 4px; transition: width 1.5s ease; }
@@ -679,7 +710,7 @@ class BuderusMonitorCard extends HTMLElement {
       .ctrl-switch input:checked + .slider::before { transform: translateX(20px); }
 
       .section-divider {
-        font-size: 0.7rem; font-weight: 800; text-transform: uppercase;
+        font-size: 0.7rem; font-weight: 800; text-transform: none;
         letter-spacing: 1px; color: ${s.accent}; opacity: 0.7;
         margin: 16px 0 10px; padding-left: 4px;
       }
@@ -1037,13 +1068,13 @@ class BuderusMonitorCardEditor extends HTMLElement {
         details { margin-bottom: 12px; border: 1px solid rgba(128,128,128,0.15); border-radius: 12px; overflow: hidden; }
         summary {
           padding: 12px 16px; cursor: pointer; font-weight: 800; font-size: 0.85rem;
-          text-transform: uppercase; letter-spacing: 0.8px;
+          text-transform: none; letter-spacing: 0.8px;
           background: rgba(128,128,128,0.06); display: flex; align-items: center; gap: 8px;
         }
         summary ha-icon { --mdc-icon-size: 20px; }
         .section { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
         .field { display: flex; flex-direction: column; gap: 4px; }
-        .field label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--secondary-text-color); }
+        .field label { font-size: 0.72rem; font-weight: 700; text-transform: none; letter-spacing: 0.5px; color: var(--secondary-text-color); }
         .field input, .field select { width: 100%; padding: 8px 12px; border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; background: var(--card-background-color, #fff); color: var(--primary-text-color); font-size: 0.85rem; }
         ha-entity-picker { width: 100%; }
         .row { display: flex; gap: 10px; }
@@ -1053,7 +1084,7 @@ class BuderusMonitorCardEditor extends HTMLElement {
           padding: 5px 12px; border-radius: 8px; font-size: 0.72rem; font-weight: 700;
           cursor: pointer; border: 1px solid rgba(128,128,128,0.2);
           background: rgba(128,128,128,0.06); transition: all 0.2s;
-          text-transform: uppercase; letter-spacing: 0.5px;
+          text-transform: none; letter-spacing: 0.5px;
         }
         .chip.active { background: var(--primary-color, #03a9f4); color: white; border-color: transparent; }
         .switch-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
