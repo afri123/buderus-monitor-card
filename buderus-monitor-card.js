@@ -530,9 +530,11 @@ set hass(hass) {
     // Attach tab listeners
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
+        if (this._activeTab === btn.dataset.tab) return;
         this._activeTab = btn.dataset.tab;
         this._fullRender();
       });
+
     });
 
     // Init mini-graph-cards
