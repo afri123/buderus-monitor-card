@@ -1,460 +1,300 @@
 // ================================================================
-// Buderus (EMS-ESP) Monitor Card  v0.1.0
+// Buderus Pro Monitor Card  v0.2.0
 // ================================================================
 
-const BMC_VERSION = "0.1.0";
+const BMC_VERSION = "0.2.0";
 
 const BMC_DEFAULTS = {
-  title: "Wärmepumpe",
+  title: "Buderus WLW196i Pro",
   title_icon: "mdi:heat-pump",
-  auto_discover: true,
-  show_energy: true,
-  show_system: true,
-  show_actions: true,
+  graph_hours: 24,
+  show_graphs: true,
+  show_efficiency: true,
+  show_diagnostics: true,
   style: {
     card_bg: "var(--ha-card-background, var(--card-background-color, #fff))",
     card_padding: "20px",
-    card_border_radius: "16px",
-    card_shadow: "var(--ha-card-box-shadow, 0 2px 16px rgba(0,0,0,.07))",
-    font_family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-    text_primary: "var(--primary-text-color)",
-    text_secondary: "var(--secondary-text-color)",
-    text_meta: "var(--disabled-text-color, #9e9e9e)",
+    accent_color: "#00549f", // Buderus Blau
     color_heating: "#ff5722",
     color_dhw: "#e91e63",
     color_cooling: "#03a9f4",
     color_idle: "#4caf50",
-    color_error: "#f44336",
+    graph_color: "rgba(128,128,128,0.2)",
+    font_family: "var(--paper-font-body1_-_font-family, sans-serif)"
   }
 };
 
 function _mergeConfig(config) {
-  const out = Object.assign({}, BMC_DEFAULTS, config);
-  out.style = Object.assign({}, BMC_DEFAULTS.style, config.style || {});
+  const out = JSON.parse(JSON.stringify(BMC_DEFAULTS));
+  if (config) {
+    Object.assign(out, config);
+    if (config.style) Object.assign(out.style, config.style);
+  }
   return out;
 }
 
-// ── MAIN CARD ──────────────────────────────────────────────────
 class BuderusMonitorCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._config = null;
-    this._hass = null;
-    this._rendered = false;
+    this._history = {};
   }
 
   static getConfigElement() { return document.createElement("buderus-monitor-card-editor"); }
-  static getStubConfig() { return { title: "Buderus WLW196i", title_icon: "mdi:heat-pump" }; }
 
   setConfig(config) {
     this._config = _mergeConfig(config);
-    this._rendered = false;
-    if (this._hass) this._paint();
+    this._render();
   }
 
   set hass(hass) {
+    const oldHass = this._hass;
     this._hass = hass;
-    this._paint();
+    this._updateData(oldHass);
   }
 
-  _paint() {
-    if (!this._config || !this._hass) return;
-    if (!this._rendered) { this._buildShell(); this._rendered = true; }
-    this._update();
+  // ── HISTORY FETCHING ──────────────────────────────────────────
+  async _fetchHistory(entityId) {
+    if (!this._hass || !entityId) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - this._config.graph_hours * 60 * 60 * 1000);
+    
+    try {
+      const result = await this._hass.callApi(
+        "GET",
+        `history/period/${ Luxembourg = start.toISOString()}?filter_entity_id=${entityId}&end_time=${end.toISOString()}`
+      );
+      if (result && result[0]) {
+        this._history[entityId] = result[0]
+          .map(state => parseFloat(state.state))
+          .filter(val => !isNaN(val));
+        this._updateGraphs();
+      }
+    } catch (e) { console.error("Error fetching history", e); }
   }
 
   _buildShell() {
     const s = this._config.style;
-
     this.shadowRoot.innerHTML = `
 <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:host { display: block; }
+  :host { display: block; --accent: ${s.accent_color}; }
+  .card { background: ${s.card_bg}; padding: ${s.card_padding}; border-radius: 16px; font-family: ${s.font_family}; position: relative; overflow: hidden; }
+  
+  .header { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid rgba(128,128,128,0.1); padding-bottom: 10px; }
+  .title { font-weight: 800; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+  
+  /* Hero Grid with Graphs */
+  .hero-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px; }
+  .metric-box { 
+    background: rgba(128,128,128,0.05); border-radius: 12px; padding: 15px; 
+    position: relative; overflow: hidden; display: flex; flex-direction: column;
+  }
+  .metric-box svg { position: absolute; bottom: 0; left: 0; width: 100%; height: 40px; pointer-events: none; }
+  .m-label { font-size: 0.7rem; text-transform: uppercase; color: var(--secondary-text-color); font-weight: 700; z-index: 1; }
+  .m-value { font-size: 1.4rem; font-weight: 900; z-index: 1; }
 
-.card {
-  background: ${s.card_bg};
-  border-radius: ${s.card_border_radius};
-  padding: ${s.card_padding};
-  box-shadow: ${s.card_shadow};
-  font-family: ${s.font_family};
-  color: ${s.text_primary};
-  overflow: hidden;
-  position: relative;
-}
+  /* Efficiency Section */
+  .eff-bar { margin: 20px 0; }
+  .bar-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: 700; margin-bottom: 5px; }
+  .track { height: 8px; background: rgba(128,128,128,0.1); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; transition: width 1s ease; }
 
-/* ── HEADER ── */
-.header {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 20px; padding-bottom: 15px;
-  border-bottom: 1px solid rgba(128,128,128,.1);
-}
-.header-left { display: flex; align-items: center; gap: 10px; }
-.header-icon { --mdc-icon-size: 24px; color: ${s.text_secondary}; transition: color 0.4s ease; }
-.title-wrap { display: flex; flex-direction: column; }
-.card-title { font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
-.card-subtitle { font-size: 11px; color: ${s.text_meta}; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+  /* Diagnostics */
+  .diag-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 15px; }
+  .diag-item { text-align: center; background: rgba(128,128,128,0.03); padding: 8px; border-radius: 8px; }
+  .diag-val { font-size: 0.9rem; font-weight: 700; display: block; }
+  .diag-lbl { font-size: 0.6rem; color: var(--secondary-text-color); text-transform: uppercase; }
 
-.status-badge {
-  padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.5px;
-  background: rgba(128,128,128,0.1); color: ${s.text_secondary};
-  transition: all 0.4s ease; display: flex; align-items: center; gap: 4px;
-}
-.status-badge ha-icon { --mdc-icon-size: 14px; }
-
-/* ── HERO METRICS (Temps) ── */
-.hero-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;
-}
-.h-metric {
-  background: rgba(128,128,128,.04); border-radius: 12px; padding: 12px 8px;
-  text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  border: 1px solid transparent; transition: border-color 0.3s;
-}
-.h-metric:hover { border-color: rgba(128,128,128,.15); cursor: pointer; }
-.hm-icon { --mdc-icon-size: 20px; color: ${s.text_meta}; margin-bottom: 6px; }
-.hm-val { font-size: 18px; font-weight: 800; color: ${s.text_primary}; line-height: 1.1; }
-.hm-unit { font-size: 10px; font-weight: 600; color: ${s.text_meta}; }
-.hm-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: ${s.text_secondary}; margin-top: 4px; }
-
-/* ── POWER & COMPRESSOR BAR ── */
-.power-section { margin-bottom: 20px; }
-.ps-header { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; text-transform: uppercase; color: ${s.text_secondary}; margin-bottom: 6px; }
-.track { height: 6px; background: rgba(128,128,128,.1); border-radius: 99px; overflow: hidden; position: relative; }
-.fill { height: 100%; border-radius: 99px; background: ${s.color_idle}; transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.4s; }
-
-/* ── DETAILS LIST ── */
-.details { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.d-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 12px; background: rgba(128,128,128,.03); border-radius: 8px;
-  font-size: 12px;
-}
-.d-lbl { color: ${s.text_secondary}; display: flex; align-items: center; gap: 6px; }
-.d-lbl ha-icon { --mdc-icon-size: 14px; opacity: 0.7; }
-.d-val { font-weight: 600; color: ${s.text_primary}; }
-
-/* ── ACTIONS ── */
-.actions {
-  display: flex; gap: 10px; margin-top: 20px; padding-top: 15px; border-top: 1px solid rgba(128,128,128,.1);
-}
-.btn {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 10px; background: rgba(128,128,128,.05); border: 1px solid rgba(128,128,128,.1);
-  border-radius: 8px; font-family: inherit; font-size: 12px; font-weight: 600;
-  color: ${s.text_primary}; cursor: pointer; transition: background 0.2s;
-}
-.btn:hover { background: rgba(128,128,128,.12); }
-.btn ha-icon { --mdc-icon-size: 16px; color: ${s.color_dhw}; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
 </style>
-
 <div class="card">
   <div class="header">
-    <div class="header-left">
-      <ha-icon class="header-icon" id="icon" icon="mdi:heat-pump"></ha-icon>
-      <div class="title-wrap">
-        <div class="card-title" id="title"></div>
-        <div class="card-subtitle" id="subtitle">System Offline</div>
-      </div>
-    </div>
-    <div class="status-badge" id="status"><ha-icon icon="mdi:power-sleep"></ha-icon> <span>Standby</span></div>
+    <div class="title"><ha-icon icon="${this._config.title_icon}"></ha-icon> ${this._config.title}</div>
+    <div id="status-text" style="font-size: 0.8rem; font-weight: 700;"></div>
   </div>
-
-  <div class="hero-grid" id="hero"></div>
-  
-  <div class="power-section" id="power">
-    <div class="ps-header"><span>Kompressor</span><span id="p-val">0 W</span></div>
-    <div class="track"><div class="fill" id="p-fill" style="width: 0%"></div></div>
+  <div class="hero-grid">
+    ${this._renderMetricBox('Aussen', 'sensor.boiler_outside_temperature', '°C')}
+    ${this._renderMetricBox('Vorlauf', 'sensor.boiler_current_flow_temperature', '°C')}
+    ${this._renderMetricBox('WW-Speicher', 'sensor.boiler_reservoir_temp_tw1', '°C')}
+    ${this._renderMetricBox('Leistung', 'sensor.boiler_compressor_current_power', 'W')}
   </div>
-
-  <div class="details" id="details"></div>
-
-  <div class="actions" id="actions"></div>
-</div>`;
-
-    this._ui = {
-      icon: this.shadowRoot.getElementById("icon"),
-      title: this.shadowRoot.getElementById("title"),
-      subtitle: this.shadowRoot.getElementById("subtitle"),
-      status: this.shadowRoot.getElementById("status"),
-      hero: this.shadowRoot.getElementById("hero"),
-      power: this.shadowRoot.getElementById("power"),
-      pVal: this.shadowRoot.getElementById("p-val"),
-      pFill: this.shadowRoot.getElementById("p-fill"),
-      details: this.shadowRoot.getElementById("details"),
-      actions: this.shadowRoot.getElementById("actions"),
-    };
-  }
-
-  // ── HELPER: Safely get state ──────────────────────────────────
-  _get(entityId, parseNum = false) {
-    const s = this._hass.states[entityId];
-    if (!s) return parseNum ? 0 : null;
-    return parseNum ? parseFloat(s.state) || 0 : s.state;
-  }
-  
-  _getAttr(entityId, attr) {
-    const s = this._hass.states[entityId];
-    return s && s.attributes ? s.attributes[attr] : null;
-  }
-
-  // ── SMART UPDATE LOOP ─────────────────────────────────────────
-  _update() {
-    const c = this._config;
-    const s = c.style;
-
-    // Header updates
-    if (this._ui.title.textContent !== c.title) this._ui.title.textContent = c.title;
-
-    // 1. Determine System Status
-    const isHeating = this._get('binary_sensor.boiler_heating_active') === 'on';
-    const isDHW = this._get('binary_sensor.boiler_tapwater_active') === 'on';
-    const isCooling = this._get('binary_sensor.thermostat_hc1_cooling_on') === 'on';
-    const hasError = this._get('sensor.boiler_last_error_code') && this._get('sensor.boiler_last_error_code') !== '0' && this._get('sensor.boiler_last_error_code') !== 'none';
-    const isOffline = this._get('binary_sensor.system_status') === 'off';
-
-    let stateStr = "Standby";
-    let stateColor = s.color_idle;
-    let stateIcon = "mdi:power-sleep";
-
-    if (isOffline) { stateStr = "Offline"; stateColor = s.text_meta; stateIcon = "mdi:lan-disconnect"; }
-    else if (hasError) { stateStr = "Fehler"; stateColor = s.color_error; stateIcon = "mdi:alert-circle"; }
-    else if (isDHW) { stateStr = "Warmwasser"; stateColor = s.color_dhw; stateIcon = "mdi:water-boiler"; }
-    else if (isHeating) { stateStr = "Heizen"; stateColor = s.color_heating; stateIcon = "mdi:radiator"; }
-    else if (isCooling) { stateStr = "Kühlen"; stateColor = s.color_cooling; stateIcon = "mdi:snowflake"; }
-
-    this._ui.status.style.backgroundColor = `color-mix(in srgb, ${stateColor} 15%, transparent)`;
-    this._ui.status.style.color = stateColor;
-    this._ui.status.innerHTML = `<ha-icon icon="${stateIcon}"></ha-icon> <span>${stateStr}</span>`;
-    this._ui.icon.style.color = stateColor;
-    this._ui.icon.icon = c.title_icon;
-
-    // Subtitle (HC1 Mode)
-    const hc1Mode = this._get('select.thermostat_hc1_operating_mode') || 'Auto';
-    const hc1State = this._get('climate.thermostat_hc1');
-    const subTxt = `Heizkreis 1: ${hc1Mode}`;
-    if (this._ui.subtitle.textContent !== subTxt) this._ui.subtitle.textContent = subTxt;
-
-    // 2. Build Hero Metrics (Diffing logic to prevent flicker)
-    const outTemp = this._get('sensor.boiler_outside_temperature', true);
-    const flowTemp = this._get('sensor.boiler_current_flow_temperature', true);
-    const targetFlow = this._get('sensor.thermostat_hc1_target_flow_temperature', true);
-    const retTemp = this._get('sensor.boiler_return_temperature', true);
-    const dhwTemp = this._get('sensor.boiler_reservoir_temp_tw1', true);
-
-    const heroHtml = `
-      ${this._renderHeroMetric('Außen', outTemp, '°C', 'mdi:thermometer-lines', 'sensor.boiler_outside_temperature')}
-      ${this._renderHeroMetric('Vorlauf', flowTemp, '°C', 'mdi:wave', 'sensor.boiler_current_flow_temperature', targetFlow > 0 ? `Ziel: ${targetFlow}°` : null)}
-      ${this._renderHeroMetric('Rücklauf', retTemp, '°C', 'mdi:water-pump', 'sensor.boiler_return_temperature')}
-      ${this._renderHeroMetric('Speicher', dhwTemp, '°C', 'mdi:water-thermometer', 'sensor.boiler_reservoir_temp_tw1')}
+  <div id="eff-area"></div>
+  <div id="diag-area"></div>
+</div>
     `;
-    if (this._ui.hero._cached !== heroHtml) {
-      this._ui.hero.innerHTML = heroHtml;
-      this._ui.hero._cached = heroHtml;
-    }
+  }
 
-    // 3. Compressor Power & Modulation
-    const power = this._get('sensor.boiler_compressor_current_power', true);
-    const mod = this._get('sensor.boiler_compressor_speed', true); // Often in %
-    
-    // Animate bar based on modulation or calculated percentage (assuming max 3000W for visual scale if mod % isn't available)
-    const pct = mod > 0 ? mod : Math.min((power / 3000) * 100, 100); 
-    
-    if (this._ui.pVal.textContent !== `${power} W`) this._ui.pVal.textContent = `${power} W`;
-    this._ui.pFill.style.width = `${pct}%`;
-    this._ui.pFill.style.backgroundColor = power > 0 ? stateColor : s.color_idle;
+  _renderMetricBox(label, entity, unit) {
+    return `
+      <div class="metric-box" onclick="const ev = new CustomEvent('hass-more-info', {detail: {entityId: '${entity}'}, bubbles: true, composed: true}); this.dispatchEvent(ev);">
+        <span class="m-label">${label}</span>
+        <span class="m-value" id="val-${entity}">--</span>
+        <svg id="graph-${entity}" viewBox="0 0 100 40" preserveAspectRatio="none">
+          <path d="" fill="none" stroke="${this._config.style.graph_color}" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+        </svg>
+      </div>
+    `;
+  }
 
-    // 4. Details Grid
-    let detailsHtml = "";
-    
-    // Row 1: Energy
-    if (c.show_energy) {
-      const eHeat = this._get('sensor.boiler_total_energy_supplied_heating', true);
-      const eDhw = this._get('sensor.boiler_dhw_total_energy_warm_supplied', true);
-      detailsHtml += this._renderDetailRow('Ertrag Heizen', 'mdi:fire', `${eHeat.toFixed(0)} kWh`);
-      detailsHtml += this._renderDetailRow('Ertrag WW', 'mdi:water-boiler', `${eDhw.toFixed(0)} kWh`);
-    }
+  _updateData(oldHass) {
+    if (!this._hass) return;
+    if (!this.shadowRoot.innerHTML) this._buildShell();
 
-    // Row 2: Uptime / System
-    if (c.show_system) {
-      const bStarts = this._get('sensor.boiler_compressor_control_starts') || this._get('sensor.boiler_burner_starts');
-      const bStartsVal = bStarts ? bStarts : 'N/A';
-      const wifi = this._get('sensor.system_wifi_strength') ? `${this._get('sensor.system_wifi_strength')}%` : 'N/A';
-      detailsHtml += this._renderDetailRow('Verdichter Starts', 'mdi:restart', bStartsVal);
-      detailsHtml += this._renderDetailRow('EMS WiFi', 'mdi:wifi', wifi);
-    }
+    const entities = [
+      'sensor.boiler_outside_temperature', 
+      'sensor.boiler_current_flow_temperature',
+      'sensor.boiler_reservoir_temp_tw1',
+      'sensor.boiler_compressor_current_power'
+    ];
 
-    if (this._ui.details._cached !== detailsHtml) {
-      this._ui.details.innerHTML = detailsHtml;
-      this._ui.details._cached = detailsHtml;
-    }
-
-    // 5. Actions
-    if (c.show_actions) {
-      const dhwSwitch = this._hass.states['switch.thermostat_dhw_charge'];
-      const hasDhwSwitch = !!dhwSwitch;
-      
-      const actHtml = hasDhwSwitch 
-        ? `<button class="btn" onclick="this.getRootNode().host._toggleDHW()">
-             <ha-icon icon="mdi:water-plus"></ha-icon> 1x Warmwasser
-           </button>`
-        : '';
-        
-      if (this._ui.actions._cached !== actHtml) {
-        this._ui.actions.innerHTML = actHtml;
-        this._ui.actions._cached = actHtml;
+    entities.forEach(eid => {
+      const state = this._hass.states[eid];
+      if (state) {
+        const valEl = this.shadowRoot.getElementById(`val-${eid}`);
+        const val = parseFloat(state.state).toFixed(1);
+        if (valEl && valEl.textContent !== val) {
+          valEl.textContent = `${val}${state.attributes.unit_of_measurement || ''}`;
+          // Fetch history if not present or hours changed
+          if (!this._history[eid]) this._fetchHistory(eid);
+        }
       }
-    } else {
-      this._ui.actions.innerHTML = "";
-    }
+    });
+
+    this._updateStatus();
+    if (this._config.show_efficiency) this._updateEfficiency();
+    if (this._config.show_diagnostics) this._updateDiagnostics();
   }
 
-  _renderHeroMetric(label, val, unit, icon, entityId, extraTxt = null) {
-    return `
-      <div class="h-metric" onclick="this.getRootNode().host._moreInfo('${entityId}')">
-        <ha-icon class="hm-icon" icon="${icon}"></ha-icon>
-        <div class="hm-val">${val.toFixed(1)}<span class="hm-unit">${unit}</span></div>
-        <div class="hm-lbl">${label}</div>
-        ${extraTxt ? `<div style="font-size:8px; color:var(--disabled-text-color); margin-top:2px;">${extraTxt}</div>` : ''}
+  _updateStatus() {
+    const isHeating = this._hass.states['binary_sensor.boiler_heating_active']?.state === 'on';
+    const isDHW = this._hass.states['binary_sensor.boiler_tapwater_active']?.state === 'on';
+    const color = isDHW ? this._config.style.color_dhw : (isHeating ? this._config.style.color_heating : this._config.style.color_idle);
+    const text = isDHW ? 'Warmwasser' : (isHeating ? 'Heizbetrieb' : 'Standby');
+    
+    const stEl = this.shadowRoot.getElementById('status-text');
+    stEl.style.color = color;
+    stEl.innerHTML = `<span class="status-dot" style="background:${color}"></span>${text}`;
+  }
+
+  _updateEfficiency() {
+    const heatPower = parseFloat(this._hass.states['sensor.boiler_compressor_power_output']?.state || 0);
+    const elecPower = parseFloat(this._hass.states['sensor.boiler_compressor_current_power']?.state || 0);
+    const cop = elecPower > 100 ? (heatPower / elecPower).toFixed(2) : "0.0";
+    
+    const area = this.shadowRoot.getElementById('eff-area');
+    area.innerHTML = `
+      <div class="eff-bar">
+        <div class="bar-label"><span>Aktuelle Effizienz (COP)</span><span>${cop}</span></div>
+        <div class="track"><div class="fill" style="width: ${Math.min(parseFloat(cop)*20, 100)}%; background: ${this._config.style.accent_color}"></div></div>
       </div>
     `;
   }
 
-  _renderDetailRow(label, icon, val) {
-    return `
-      <div class="d-row">
-        <div class="d-lbl"><ha-icon icon="${icon}"></ha-icon> ${label}</div>
-        <div class="d-val">${val}</div>
+  _updateDiagnostics() {
+    const flow = parseFloat(this._hass.states['sensor.boiler_current_flow_temperature']?.state || 0);
+    const ret = parseFloat(this._hass.states['sensor.boiler_return_temperature']?.state || 0);
+    const delta = (flow - ret).toFixed(1);
+    const starts = this._hass.states['sensor.boiler_compressor_control_starts']?.state || '--';
+    const modulation = this._hass.states['sensor.boiler_compressor_speed']?.state || '0';
+
+    const area = this.shadowRoot.getElementById('diag-area');
+    area.innerHTML = `
+      <div class="diag-grid">
+        <div class="diag-item"><span class="diag-val">${delta} K</span><span class="diag-lbl">Spreizung</span></div>
+        <div class="diag-item"><span class="diag-val">${modulation} %</span><span class="diag-lbl">Modulation</span></div>
+        <div class="diag-item"><span class="diag-val">${starts}</span><span class="diag-lbl">Starts</span></div>
       </div>
     `;
   }
 
-  // ── INTERACTIONS ──────────────────────────────────────────────
-  _moreInfo(entityId) {
-    this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: entityId }, bubbles: true, composed: true }));
-  }
+  _updateGraphs() {
+    Object.keys(this._history).forEach(eid => {
+      const data = this._history[eid];
+      const svgPath = this.shadowRoot.querySelector(`#graph-${eid.replace(/\./g, '\\.')} path`);
+      if (!svgPath || !data.length) return;
 
-  _toggleDHW() {
-    const s = this._hass.states['switch.thermostat_dhw_charge'];
-    if (!s) return;
-    this._hass.callService("switch", "toggle", { entity_id: 'switch.thermostat_dhw_charge' });
-  }
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+      const range = max - min || 1;
+      
+      const points = data.map((val, i) => {
+        const x = (i / (data.length - 1)) * 100;
+        const y = 40 - ((val - min) / range) * 35; // 5px padding top
+        return `${x},${y}`;
+      }).join(' L ');
 
-  getCardSize() { return 3; }
+      svgPath.setAttribute('d', `M ${points}`);
+    });
+  }
 }
 
-
-// ================================================================
-// EDITOR
-// ================================================================
+// ── EDITOR ──────────────────────────────────────────────────────
 class BuderusMonitorCardEditor extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._config = null;
-    this._hass = null;
-    this._built = false;
   }
 
   setConfig(config) {
     this._config = _mergeConfig(config);
-    if (this._built) this._sync();
-    else if (this._hass) this._build();
+    this._render();
   }
 
-  set hass(hass) {
-    this._hass = hass;
-    if (this._config && !this._built) this._build();
-  }
-
-  _build() {
-    if (this._built) return;
-    this._built = true;
-
+  _render() {
     this.shadowRoot.innerHTML = `
 <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:host { display: block; font-family: var(--primary-font-family, sans-serif); }
-details { border: 1px solid rgba(0,0,0,.1); border-radius: 8px; margin-bottom: 8px; background: #fff; }
-summary { padding: 12px; font-weight: 600; cursor: pointer; background: rgba(0,0,0,.02); list-style: none; display: flex; align-items: center; gap: 8px; }
-summary::after { content: '›'; margin-left: auto; transition: transform 0.2s; }
-details[open] summary::after { transform: rotate(90deg); }
-.content { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.sw-row { display: flex; justify-content: space-between; align-items: center; }
-ha-textfield { width: 100%; }
+  details { border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; margin-bottom: 10px; background: var(--card-background-color); }
+  summary { padding: 12px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; }
+  .content { padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+  ha-textfield, ha-switch { width: 100%; }
 </style>
-
 <details open>
-  <summary><ha-icon icon="mdi:cog"></ha-icon> Generell</summary>
+  <summary>Allgemein <ha-icon icon="mdi:chevron-down"></ha-icon></summary>
   <div class="content">
-    <div class="row2">
-      <ha-textfield id="f_title" label="Titel"></ha-textfield>
-      <ha-icon-picker id="f_title_icon" label="Icon"></ha-icon-picker>
-    </div>
-    <div class="sw-row"><span>Zeige Energieertrag</span><ha-switch id="sw_energy"></ha-switch></div>
-    <div class="sw-row"><span>Zeige System & Starts</span><ha-switch id="sw_system"></ha-switch></div>
-    <div class="sw-row"><span>Zeige Schnellektionen (1x WW)</span><ha-switch id="sw_actions"></ha-switch></div>
+    <ha-textfield label="Titel" .value="${this._config.title}" @input="${e => this._updateConfig('title', e.target.value)}"></ha-textfield>
+    <ha-textfield label="Graph Stunden (History)" type="number" .value="${this._config.graph_hours}" @input="${e => this._updateConfig('graph_hours', e.target.value)}"></ha-textfield>
   </div>
 </details>
-
 <details>
-  <summary><ha-icon icon="mdi:palette"></ha-icon> Farben & Styling</summary>
+  <summary>Anzeige-Optionen <ha-icon icon="mdi:eye"></ha-icon></summary>
   <div class="content">
-    <div class="row2">
-      <ha-textfield id="f_color_heating" label="Farbe Heizen (Hex)"></ha-textfield>
-      <ha-textfield id="f_color_dhw" label="Farbe Warmwasser (Hex)"></ha-textfield>
-    </div>
-    <div class="row2">
-      <ha-textfield id="f_color_cooling" label="Farbe Kühlen (Hex)"></ha-textfield>
-      <ha-textfield id="f_color_idle" label="Farbe Standby (Hex)"></ha-textfield>
-    </div>
-    <ha-textfield id="f_card_bg" label="Karten Hintergrund (z.B. #1e1e1e)"></ha-textfield>
+    <ha-formfield label="Effizienz-Balken anzeigen"><ha-switch .checked="${this._config.show_efficiency}" @change="${e => this._updateConfig('show_efficiency', e.target.checked)}"></ha-switch></ha-formfield>
+    <ha-formfield label="Diagnose-Werte anzeigen"><ha-switch .checked="${this._config.show_diagnostics}" @change="${e => this._updateConfig('show_diagnostics', e.target.checked)}"></ha-switch></ha-formfield>
   </div>
 </details>
-`;
-    this._sync();
-    this._bind();
+<details>
+  <summary>Styling <ha-icon icon="mdi:palette"></ha-icon></summary>
+  <div class="content">
+    <ha-textfield label="Hauptfarbe (Blau)" .value="${this._config.style.accent_color}" @input="${e => this._updateStyle('accent_color', e.target.value)}"></ha-textfield>
+    <ha-textfield label="Graph-Farbe" .value="${this._config.style.graph_color}" @input="${e => this._updateStyle('graph_color', e.target.value)}"></ha-textfield>
+    <ha-textfield label="Farbe Heizen" .value="${this._config.style.color_heating}" @input="${e => this._updateStyle('color_heating', e.target.value)}"></ha-textfield>
+  </div>
+</details>
+    `;
   }
 
-  static get _MAP() {
-    return {
-      f_title: ["title"], f_title_icon: ["title_icon"],
-      sw_energy: ["show_energy"], sw_system: ["show_system"], sw_actions: ["show_actions"],
-      f_color_heating: ["style", "color_heating"], f_color_dhw: ["style", "color_dhw"],
-      f_color_cooling: ["style", "color_cooling"], f_color_idle: ["style", "color_idle"],
-      f_card_bg: ["style", "card_bg"]
-    };
+  _updateConfig(key, value) {
+    this._config = { ...this._config, [key]: value };
+    this._fireConfigChanged();
   }
 
-  _sync() {
-    const c = this._config, s = c.style;
-    const set = (id, v) => { const el = this.shadowRoot.getElementById(id); if (el) el.value = String(v ?? ""); };
-    const chk = (id, v) => { const el = this.shadowRoot.getElementById(id); if (el) el.checked = !!v; };
-
-    set("f_title", c.title); set("f_title_icon", c.title_icon);
-    chk("sw_energy", c.show_energy); chk("sw_system", c.show_system); chk("sw_actions", c.show_actions);
-    set("f_color_heating", s.color_heating); set("f_color_dhw", s.color_dhw);
-    set("f_color_cooling", s.color_cooling); set("f_color_idle", s.color_idle);
-    set("f_card_bg", s.card_bg);
+  _updateStyle(key, value) {
+    this._config.style = { ...this._config.style, [key]: value };
+    this._fireConfigChanged();
   }
 
-  _bind() {
-    this.shadowRoot.querySelectorAll("ha-textfield, ha-switch, ha-icon-picker").forEach(el => {
-      el.addEventListener(el.tagName === "HA-ICON-PICKER" || el.tagName === "HA-SWITCH" ? "change" : "input", e => {
-        let val = el.tagName === "HA-SWITCH" ? el.checked : (e.detail?.value !== undefined ? e.detail.value : el.value);
-        const newCfg = _mergeConfig(this._config);
-        const p = BuderusMonitorCardEditor._MAP[el.id];
-        if (p.length === 1) newCfg[p[0]] = val; else newCfg[p[0]][p[1]] = val;
-        this._config = newCfg;
-        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: newCfg }, bubbles: true, composed: true }));
-      });
-    });
+  _fireConfigChanged() {
+    const ev = new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true });
+    this.dispatchEvent(ev);
   }
 }
 
 customElements.define("buderus-monitor-card", BuderusMonitorCard);
 customElements.define("buderus-monitor-card-editor", BuderusMonitorCardEditor);
+
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "buderus-monitor-card", name: "Buderus WLW Monitor", preview: true, description: "Smart Dashboard für EMS-ESP Buderus Wärmepumpen" });
+window.customCards.push({
+  type: "buderus-monitor-card",
+  name: "Buderus Pro Monitor",
+  description: "High-End Monitoring für Buderus Wärmepumpen mit Graphen und Diagnose."
+});
