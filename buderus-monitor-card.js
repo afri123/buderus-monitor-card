@@ -1,9 +1,17 @@
 // ================================================================
-// Buderus Monitor Card v0.0.8
+// Buderus Monitor Card v0.0.9
 // Full EMS-ESP integration · mini-graph-card · Visual Editor
 // ================================================================
 
-const BMC_VERSION = "0.0.8";
+const BMC_VERSION = "0.0.9";
+
+/* ── Graph color palette – one distinct color per slot ─────────── */
+const BMC_GRAPH_COLORS = [
+  "#4fc3f7", "#81c784", "#ffb74d", "#f06292", "#ba68c8",
+  "#4db6ac", "#ff8a65", "#a1887f", "#90a4ae", "#fff176",
+  "#80cbc4", "#ce93d8", "#ef9a9a", "#80deea", "#c5e1a5",
+  "#ffe082", "#b39ddb", "#80cbc4", "#ffcc80", "#bcaaa4"
+];
 
 /* ── Default Entity Map ───────────────────────────────────────── */
 const BMC_ENTITY_DEFAULTS = {
@@ -273,7 +281,7 @@ const BMC_SECTIONS = {
     label: "Dashboard",
     icon: "mdi:view-dashboard",
     metrics: ["outside_temp", "flow_temp", "return_temp", "dhw_temp", "compressor_power", "compressor_speed"],
-    graphs: ["outside_temp", "flow_temp", "return_temp", "dhw_temp", "compressor_power"]
+    graphs: ["outside_temp", "flow_temp", "return_temp", "dhw_temp", "compressor_power", "compressor_speed"]
   },
   temperatures: {
     label: "Temperaturen",
@@ -390,19 +398,70 @@ const BMC_STYLE_DEFAULTS = {
   color_cooling: "#42a5f5",
   color_idle: "#66bb6a",
   color_error: "#ef5350",
+
+  // Typography
+  font_family: "var(--primary-font-family, sans-serif)",
+  title_font_size: "1.15rem",
+  title_font_weight: "800",
+  title_color: "var(--primary-text-color, #e0e0e0)",
+  title_letter_spacing: "-0.3px",
+
+  // Metric tile
+  metric_value_size: "1.5rem",
+  metric_label_size: "0.7rem",
+  metric_value_weight: "900",
+  metric_label_weight: "800",
+  metric_value_color: "var(--primary-text-color, #eee)",
+  metric_label_color: "var(--secondary-text-color, #888)",
+  metric_box_bg: "rgba(255,255,255,0.04)",
+  metric_box_radius: "14px",
+  metric_box_padding: "16px",
+  metric_box_border: "1px solid rgba(255,255,255,0.04)",
+  metric_min_height: "100px",
+
+  // Tabs
+  tab_style: "pills", // pills | underline | minimal
+  tab_bg: "rgba(255,255,255,0.04)",
+  tab_active_bg: "", // auto from accent if empty
+  tab_border_radius: "10px",
+  tab_font_size: "0.72rem",
+  tab_font_weight: "700",
+  tab_gap: "4px",
+
+  // Graphs
   graph_hours: 24,
   graph_line_width: 2,
   graph_opacity: "0.25",
-  metric_value_size: "1.5rem",
-  metric_label_size: "0.7rem",
-  tab_style: "pills", // pills | underline | minimal
-  show_header: true,
+  graph_fill: true,
+  graph_points: false,
+  graph_extrema: false,
+  graphs_in_detail_tabs: true, // show mini graphs in all tabs, not just hero
+
+  // COP
   show_cop: true,
+
+  // Status bar
   show_status_bar: true,
+  status_pill_bg: "rgba(255,255,255,0.06)",
+  status_pill_border: "1px solid rgba(255,255,255,0.08)",
+  status_pill_radius: "20px",
+  status_pill_font_size: "0.72rem",
+
+  // Layout
+  show_header: true,
   animate: true,
   compact: false,
   columns_hero: 3,
   columns_detail: 3,
+
+  // Section divider style
+  section_divider_color: "", // auto from accent if empty
+  section_divider_size: "0.7rem",
+
+  // Control rows
+  control_row_bg: "rgba(255,255,255,0.04)",
+  control_row_border: "1px solid rgba(255,255,255,0.04)",
+  control_row_radius: "12px",
 };
 
 function _merge(defaults, overrides) {
@@ -447,6 +506,13 @@ function _fmt(val, unit) {
   return String(val) + (unit ? ` ${unit}` : "");
 }
 
+/* ── Returns whether a given entity domain is numeric/graphable ── */
+function _isGraphable(eid) {
+  if (!eid) return false;
+  const domain = eid.split(".")[0];
+  return ["sensor", "number"].includes(domain);
+}
+
 /* ================================================================
    MAIN CARD
    ================================================================ */
@@ -467,41 +533,35 @@ class BuderusMonitorCard extends HTMLElement {
     if (this._hass) this._fullRender();
   }
 
-set hass(hass) {
-  this._hass = hass;
-
-  if (!this._built) {
-    this._fullRender();
-    this._built = true;
-  } else {
-    this._updateValuesOnly();
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) {
+      this._fullRender();
+      this._built = true;
+    } else {
+      this._updateValuesOnly();
+    }
   }
-}
 
   _updateValuesOnly() {
-  // Nur Werte aktualisieren statt DOM neu bauen
-  this.shadowRoot.querySelectorAll(".metric-box").forEach(box => {
-    const valEl = box.querySelector(".m-value");
-    const labelEl = box.querySelector(".m-label");
-    if (!valEl || !labelEl) return;
-
-    const label = labelEl.textContent;
-    const key = Object.keys(BMC_LABELS).find(k => BMC_LABELS[k] === label);
-    if (!key) return;
-
-    const eid = this._config.entities[key];
-    const sv = _sv(this._hass, eid);
-
-    if (eid?.startsWith("binary_sensor.")) {
-      valEl.textContent = sv.s === "on" ? "An" : "Aus";
-      valEl.classList.toggle("binary-on", sv.s === "on");
-      valEl.classList.toggle("binary-off", sv.s !== "on");
-    } else {
-      valEl.textContent = _fmt(sv.v, sv.u);
-    }
-  });
-}
-
+    this.shadowRoot.querySelectorAll(".metric-box").forEach(box => {
+      const valEl = box.querySelector(".m-value");
+      const labelEl = box.querySelector(".m-label");
+      if (!valEl || !labelEl) return;
+      const label = labelEl.textContent;
+      const key = Object.keys(BMC_LABELS).find(k => BMC_LABELS[k] === label);
+      if (!key) return;
+      const eid = this._config.entities[key];
+      const sv = _sv(this._hass, eid);
+      if (eid?.startsWith("binary_sensor.")) {
+        valEl.textContent = sv.s === "on" ? "An" : "Aus";
+        valEl.classList.toggle("binary-on", sv.s === "on");
+        valEl.classList.toggle("binary-off", sv.s !== "on");
+      } else {
+        valEl.textContent = _fmt(sv.v, sv.u);
+      }
+    });
+  }
 
   _fullRender() {
     if (!this._config || !this._hass) return;
@@ -527,46 +587,59 @@ set hass(hass) {
       </ha-card>
     `;
 
-    // Attach tab listeners
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         if (this._activeTab === btn.dataset.tab) return;
         this._activeTab = btn.dataset.tab;
         this._fullRender();
       });
-
     });
 
-    // Init mini-graph-cards
     this._initGraphs();
-
-    // Attach control listeners
     this._attachControlListeners();
   }
 
   _buildCSS() {
     const s = this._config.style;
+    const accentRgb = s.accent;
+    const tabActiveBg = s.tab_active_bg || `${s.accent}22`;
+    const dividerColor = s.section_divider_color || s.accent;
     const animate = s.animate ? `
       @keyframes bmc-pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
       @keyframes bmc-glow { 0%,100%{box-shadow:0 0 8px ${s.accent}33} 50%{box-shadow:0 0 20px ${s.accent}66} }
       @keyframes bmc-fadein { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
     ` : "";
 
+    // Tab underline variant
+    const tabUnderlineCSS = s.tab_style === "underline" ? `
+      .bmc-tabs { border-bottom: 1px solid rgba(255,255,255,0.08); gap: 0; }
+      .tab-btn { border-radius: 0; background: transparent !important; border: none !important;
+        border-bottom: 2px solid transparent; padding: 8px 16px; margin-bottom: -1px; }
+      .tab-btn.active { border-bottom-color: ${s.accent}; color: ${s.accent}; background: transparent !important; }
+    ` : "";
+
+    const tabMinimalCSS = s.tab_style === "minimal" ? `
+      .tab-btn { background: transparent !important; border: none !important; color: var(--secondary-text-color); }
+      .tab-btn.active { color: ${s.accent}; background: transparent !important; font-weight: 900; }
+    ` : "";
+
     return `
       ${animate}
+      ${tabUnderlineCSS}
+      ${tabMinimalCSS}
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       ha-card { background: transparent !important; border: none !important; box-shadow: none !important; }
       .bmc-card {
         background: ${s.card_bg};
         border-radius: ${s.card_radius};
         padding: ${s.card_padding};
-        font-family: var(--primary-font-family);
+        font-family: ${s.font_family};
         color: var(--primary-text-color, #e0e0e0);
         position: relative;
         overflow: hidden;
       }
 
-      /* Header */
+      /* ── Header ─── */
       .bmc-header {
         display: flex; justify-content: space-between; align-items: center;
         margin-bottom: 16px; padding-bottom: 12px;
@@ -574,48 +647,65 @@ set hass(hass) {
       }
       .bmc-title {
         display: flex; align-items: center; gap: 10px;
-        font-size: 1.15rem; font-weight: 800; letter-spacing: -0.3px;
+        font-size: ${s.title_font_size};
+        font-weight: ${s.title_font_weight};
+        letter-spacing: ${s.title_letter_spacing};
+        color: ${s.title_color};
+        font-family: ${s.font_family};
       }
       .bmc-title ha-icon { color: ${s.accent}; --mdc-icon-size: 26px; }
       .bmc-version { font-size: 0.6rem; opacity: 0.3; font-weight: 400; }
 
-      /* Status Bar */
+      /* ── Status Bar ─── */
       .bmc-status {
         display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;
       }
       .status-pill {
         display: inline-flex; align-items: center; gap: 6px;
-        padding: 5px 14px; border-radius: 20px; font-size: 0.72rem;
+        padding: 5px 14px;
+        border-radius: ${s.status_pill_radius};
+        font-size: ${s.status_pill_font_size};
         font-weight: 700; text-transform: none; letter-spacing: 0.8px;
-        background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+        background: ${s.status_pill_bg};
+        border: ${s.status_pill_border};
       }
       .status-dot {
         width: 8px; height: 8px; border-radius: 50%;
         ${s.animate ? "animation: bmc-pulse 2s infinite;" : ""}
       }
 
-      /* Tabs */
+      /* ── Tabs ─── */
       .bmc-tabs {
-        display: flex; gap: 4px; margin-bottom: 16px;
+        display: flex;
+        gap: ${s.tab_gap};
+        margin-bottom: 16px;
         overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
         padding-bottom: 4px;
       }
       .bmc-tabs::-webkit-scrollbar { display: none; }
       .tab-btn {
         flex-shrink: 0; display: flex; align-items: center; gap: 5px;
-        padding: 7px 14px; border: none; border-radius: 10px; cursor: pointer;
-        font-size: 0.72rem; font-weight: 700; text-transform: none; letter-spacing: 0.5px;
-        background: rgba(255,255,255,0.04); color: var(--secondary-text-color, #999);
+        padding: 7px 14px;
+        border: none;
+        border-radius: ${s.tab_border_radius};
+        cursor: pointer;
+        font-size: ${s.tab_font_size};
+        font-weight: ${s.tab_font_weight};
+        font-family: ${s.font_family};
+        text-transform: none; letter-spacing: 0.5px;
+        background: ${s.tab_bg};
+        color: var(--secondary-text-color, #999);
         transition: all 0.25s ease; white-space: nowrap;
       }
       .tab-btn:hover { background: rgba(255,255,255,0.08); }
       .tab-btn.active {
-        background: ${s.accent}22; color: ${s.accent};
+        background: ${tabActiveBg};
+        color: ${s.accent};
         border: 1px solid ${s.accent}44;
       }
       .tab-btn ha-icon { --mdc-icon-size: 16px; }
 
-      /* Metric Grid */
+      /* ── Metric Grid ─── */
       .metric-grid {
         display: grid; grid-template-columns: repeat(${s.columns_hero}, 1fr);
         gap: 12px;
@@ -624,10 +714,14 @@ set hass(hass) {
       .metric-grid.detail { grid-template-columns: repeat(${s.columns_detail}, 1fr); }
 
       .metric-box {
-        background: rgba(255,255,255,0.04); border-radius: 14px; padding: 16px;
-        position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,0.04);
+        background: ${s.metric_box_bg};
+        border-radius: ${s.metric_box_radius};
+        padding: ${s.metric_box_padding};
+        position: relative; overflow: hidden;
+        border: ${s.metric_box_border};
         transition: all 0.25s ease; cursor: default;
-        display: flex; flex-direction: column; min-height: 100px;
+        display: flex; flex-direction: column;
+        min-height: ${s.metric_min_height};
       }
       .metric-box:hover {
         background: rgba(255,255,255,0.07);
@@ -637,22 +731,26 @@ set hass(hass) {
       .metric-box.has-graph { min-height: 130px; }
 
       .m-label {
-        font-size: ${s.metric_label_size}; text-transform: none;
-        color: var(--secondary-text-color, #888);
-        font-weight: 800; letter-spacing: 0.7px; margin-bottom: 6px; z-index: 1;
+        font-size: ${s.metric_label_size};
+        font-weight: ${s.metric_label_weight};
+        text-transform: none;
+        color: ${s.metric_label_color};
+        letter-spacing: 0.7px; margin-bottom: 6px; z-index: 1;
       }
       .m-value {
-        font-size: ${s.metric_value_size}; font-weight: 900;
-        color: var(--primary-text-color, #eee);
+        font-size: ${s.metric_value_size};
+        font-weight: ${s.metric_value_weight};
+        color: ${s.metric_value_color};
         letter-spacing: -0.5px; z-index: 1;
       }
       .m-value.binary-on { color: ${s.accent_secondary}; }
       .m-value.binary-off { color: var(--secondary-text-color, #666); }
 
+      /* ── Graph Slot ─── */
       .graph-slot {
         position: absolute; bottom: 0; left: 0; right: 0; height: 100%;
         opacity: ${s.graph_opacity}; pointer-events: none; z-index: 0;
-        overflow: hidden; border-radius: 0 0 14px 14px;
+        overflow: hidden; border-radius: 0 0 ${s.metric_box_radius} ${s.metric_box_radius};
       }
       .graph-slot mini-graph-card {
         --ha-card-background: transparent;
@@ -660,7 +758,7 @@ set hass(hass) {
         --ha-card-box-shadow: none;
       }
 
-      /* COP Bar */
+      /* ── COP Bar ─── */
       .cop-section {
         margin: 16px 0; padding: 16px; border-radius: 14px;
         background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.04);
@@ -671,12 +769,15 @@ set hass(hass) {
       .cop-track { height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
       .cop-fill { height: 100%; border-radius: 4px; transition: width 1.5s ease; }
 
-      /* Controls */
+      /* ── Controls ─── */
       .controls-section { ${s.animate ? "animation: bmc-fadein 0.3s ease;" : ""} }
       .control-row {
         display: flex; justify-content: space-between; align-items: center;
-        padding: 12px 16px; border-radius: 12px; margin-bottom: 6px;
-        background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.04);
+        padding: 12px 16px;
+        border-radius: ${s.control_row_radius};
+        margin-bottom: 6px;
+        background: ${s.control_row_bg};
+        border: ${s.control_row_border};
         transition: background 0.2s;
       }
       .control-row:hover { background: rgba(255,255,255,0.07); }
@@ -711,9 +812,13 @@ set hass(hass) {
       .ctrl-switch input:checked + .slider { background: ${s.accent}; }
       .ctrl-switch input:checked + .slider::before { transform: translateX(20px); }
 
+      /* ── Section Divider ─── */
       .section-divider {
-        font-size: 0.7rem; font-weight: 800; text-transform: none;
-        letter-spacing: 1px; color: ${s.accent}; opacity: 0.7;
+        font-size: ${s.section_divider_size};
+        font-weight: 800; text-transform: none;
+        letter-spacing: 1px;
+        color: ${dividerColor};
+        opacity: 0.7;
         margin: 16px 0 10px; padding-left: 4px;
       }
     `;
@@ -746,7 +851,6 @@ set hass(hass) {
 
     const sysStatus = _sv(this._hass, c.entities.sys_status);
     const sysOk = sysStatus.s === "on";
-
     const compAct = _sv(this._hass, c.entities.compressor_activity);
 
     return `
@@ -787,23 +891,24 @@ set hass(hass) {
     if (!sec) return "";
 
     let html = "";
+    const s = this._config.style;
 
-    // COP on hero tab
-    if (tab === "hero" && this._config.style.show_cop) {
+    if (tab === "hero" && s.show_cop) {
       html += this._renderCOP();
     }
 
-    // Metrics (sensors)
     if (sec.metrics) {
-      const hasGraphs = sec.graphs || [];
       const isHero = tab === "hero";
+      // In hero tab use explicit graphs list; in detail tabs use graphs_in_detail_tabs setting
+      const showGraphsInThisTab = isHero || s.graphs_in_detail_tabs;
       html += `<div class="metric-grid ${isHero ? "" : "detail"}">`;
+      let colorIdx = 0;
       for (const key of sec.metrics) {
         const eid = this._config.entities[key];
         const sv = _sv(this._hass, eid);
         const label = BMC_LABELS[key] || key;
-        const showGraph = hasGraphs.includes(key);
         const isBinary = eid && eid.startsWith("binary_sensor.");
+        const canGraph = showGraphsInThisTab && _isGraphable(eid);
         let valClass = "m-value";
         let display;
         if (isBinary) {
@@ -812,9 +917,11 @@ set hass(hass) {
         } else {
           display = _fmt(sv.v, sv.u);
         }
+        const graphColor = BMC_GRAPH_COLORS[colorIdx % BMC_GRAPH_COLORS.length];
+        colorIdx++;
         html += `
-          <div class="metric-box ${showGraph ? "has-graph" : ""}">
-            ${showGraph ? `<div class="graph-slot" id="graph-${key}"></div>` : ""}
+          <div class="metric-box ${canGraph ? "has-graph" : ""}">
+            ${canGraph ? `<div class="graph-slot" id="graph-${tab}-${key}" data-entity="${eid}" data-color="${graphColor}"></div>` : ""}
             <div class="m-label">${label}</div>
             <div class="${valClass}">${display}</div>
           </div>
@@ -823,21 +930,29 @@ set hass(hass) {
       html += `</div>`;
     }
 
-    // Controls
     if (sec.controls) {
       html += `<div class="controls-section">`;
       if (sec.sensors) {
         html += `<div class="section-divider">Sensoren</div>`;
         html += `<div class="metric-grid detail">`;
+        let colorIdx = 0;
         for (const key of sec.sensors) {
           const eid = this._config.entities[key];
           const sv = _sv(this._hass, eid);
           const label = BMC_LABELS[key] || key;
           const isBinary = eid && eid.startsWith("binary_sensor.");
+          const canGraph = s.graphs_in_detail_tabs && _isGraphable(eid);
           let display, valClass = "m-value";
           if (isBinary) { display = sv.s === "on" ? "AN" : "AUS"; valClass += sv.s === "on" ? " binary-on" : " binary-off"; }
           else { display = _fmt(sv.v, sv.u); }
-          html += `<div class="metric-box"><div class="m-label">${label}</div><div class="${valClass}">${display}</div></div>`;
+          const graphColor = BMC_GRAPH_COLORS[colorIdx % BMC_GRAPH_COLORS.length];
+          colorIdx++;
+          html += `
+            <div class="metric-box ${canGraph ? "has-graph" : ""}">
+              ${canGraph ? `<div class="graph-slot" id="graph-${tab}-ctrl-${key}" data-entity="${eid}" data-color="${graphColor}"></div>` : ""}
+              <div class="m-label">${label}</div>
+              <div class="${valClass}">${display}</div>
+            </div>`;
         }
         html += `</div>`;
       }
@@ -900,7 +1015,6 @@ set hass(hass) {
         </div>
       `;
     }
-
     if (domain === "select") {
       const options = sv.raw?.attributes?.options || [];
       return `
@@ -912,7 +1026,6 @@ set hass(hass) {
         </div>
       `;
     }
-
     if (domain === "number") {
       const min = sv.raw?.attributes?.min ?? 0;
       const max = sv.raw?.attributes?.max ?? 100;
@@ -925,7 +1038,6 @@ set hass(hass) {
         </div>
       `;
     }
-
     if (domain === "text") {
       return `
         <div class="control-row">
@@ -934,7 +1046,6 @@ set hass(hass) {
         </div>
       `;
     }
-
     if (domain === "climate") {
       const mode = sv.raw?.attributes?.hvac_action || sv.s;
       const temp = sv.raw?.attributes?.temperature || "—";
@@ -952,8 +1063,6 @@ set hass(hass) {
         </div>
       `;
     }
-
-    // Fallback: read-only
     return `
       <div class="control-row">
         <span class="ctrl-label">${label}</span>
@@ -963,67 +1072,55 @@ set hass(hass) {
   }
 
   _initGraphs() {
-    const sec = BMC_SECTIONS[this._activeTab];
-    if (!sec?.graphs) return;
+    const s = this._config.style;
 
-    for (const key of sec.graphs) {
-      const container = this.shadowRoot.getElementById(`graph-${key}`);
-      if (!container) continue;
-      const eid = this._config.entities[key];
-      if (!eid) continue;
-
+    this.shadowRoot.querySelectorAll(".graph-slot[data-entity]").forEach(container => {
+      const eid = container.dataset.entity;
+      const color = container.dataset.color || s.accent;
+      if (!eid) return;
       try {
         const graphCard = document.createElement("mini-graph-card");
         graphCard.setConfig({
-          entities: [{ entity: eid, color: this._config.style.accent }],
-          hours_to_show: parseInt(this._config.style.graph_hours) || 24,
+          entities: [{ entity: eid, color }],
+          hours_to_show: parseInt(s.graph_hours) || 24,
           points_per_hour: 4,
-          line_width: parseInt(this._config.style.graph_line_width) || 2,
-          animate: this._config.style.animate,
-          fill: true,
+          line_width: parseInt(s.graph_line_width) || 2,
+          animate: s.animate,
+          fill: s.graph_fill !== false,
           show: {
             name: false, state: false, legend: false,
-            icon: false, labels: false, extrema: false,
-            fill: true, points: false
+            icon: false, labels: false,
+            extrema: s.graph_extrema === true,
+            fill: s.graph_fill !== false,
+            points: s.graph_points === true
           },
           card_mod: { style: "ha-card { background: transparent !important; border: none !important; box-shadow: none !important; }" }
         });
         graphCard.hass = this._hass;
         container.appendChild(graphCard);
       } catch (e) {
-        // mini-graph-card not installed — silent fail
         container.innerHTML = "";
       }
-    }
+    });
   }
 
   _attachControlListeners() {
-    // Switches
     this.shadowRoot.querySelectorAll('input[data-domain="switch"]').forEach(el => {
       el.addEventListener("change", () => {
-        const eid = el.dataset.entity;
-        this._hass.callService("switch", el.checked ? "turn_on" : "turn_off", { entity_id: eid });
+        this._hass.callService("switch", el.checked ? "turn_on" : "turn_off", { entity_id: el.dataset.entity });
       });
     });
-
-    // Selects
     this.shadowRoot.querySelectorAll('select[data-domain="select"]').forEach(el => {
       el.addEventListener("change", () => {
-        this._hass.callService("select", "select_option", {
-          entity_id: el.dataset.entity, option: el.value
-        });
+        this._hass.callService("select", "select_option", { entity_id: el.dataset.entity, option: el.value });
       });
     });
-
-    // Numbers
     this.shadowRoot.querySelectorAll('input[data-domain="number"]').forEach(el => {
       let timeout;
       el.addEventListener("change", () => {
         clearTimeout(timeout);
         timeout = setTimeout(() => {
-          this._hass.callService("number", "set_value", {
-            entity_id: el.dataset.entity, value: parseFloat(el.value)
-          });
+          this._hass.callService("number", "set_value", { entity_id: el.dataset.entity, value: parseFloat(el.value) });
         }, 500);
       });
     });
@@ -1054,9 +1151,7 @@ class BuderusMonitorCardEditor extends HTMLElement {
 
   _passHass() {
     if (!this._hass) return;
-    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach(p => {
-      p.hass = this._hass;
-    });
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach(p => { p.hass = this._hass; });
   }
 
   _render() {
@@ -1067,50 +1162,115 @@ class BuderusMonitorCardEditor extends HTMLElement {
       <style>
         :host { display: block; }
         .editor { font-family: var(--paper-font-body1_-_font-family, sans-serif); padding: 8px; }
-        details { margin-bottom: 12px; border: 1px solid rgba(128,128,128,0.15); border-radius: 12px; overflow: hidden; }
-        summary {
-          padding: 12px 16px; cursor: pointer; font-weight: 800; font-size: 0.85rem;
-          text-transform: none; letter-spacing: 0.8px;
-          background: rgba(128,128,128,0.06); display: flex; align-items: center; gap: 8px;
+
+        /* ── Accordion ── */
+        details {
+          margin-bottom: 10px;
+          border: 1px solid rgba(128,128,128,0.2);
+          border-radius: 12px; overflow: hidden;
         }
-        summary ha-icon { --mdc-icon-size: 20px; }
-        .section { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
-        .field { display: flex; flex-direction: column; gap: 4px; }
-        .field label { font-size: 0.72rem; font-weight: 700; text-transform: none; letter-spacing: 0.5px; color: var(--secondary-text-color); }
-        .field input, .field select { width: 100%; padding: 8px 12px; border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; background: var(--card-background-color, #fff); color: var(--primary-text-color); font-size: 0.85rem; }
+        summary {
+          padding: 12px 16px; cursor: pointer; font-weight: 700; font-size: 0.85rem;
+          background: rgba(128,128,128,0.06);
+          display: flex; align-items: center; gap: 8px;
+          list-style: none; user-select: none;
+        }
+        summary::-webkit-details-marker { display: none; }
+        summary::after {
+          content: "▸"; margin-left: auto; font-size: 0.75rem;
+          transition: transform 0.2s; display: inline-block;
+        }
+        details[open] summary::after { transform: rotate(90deg); }
+        summary ha-icon { --mdc-icon-size: 18px; }
+
+        .section { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+        /* ── Fields ── */
+        .field { display: flex; flex-direction: column; gap: 5px; }
+        .field label {
+          font-size: 0.72rem; font-weight: 700; letter-spacing: 0.4px;
+          color: var(--secondary-text-color);
+        }
+        .field input[type="text"],
+        .field input[type="number"],
+        .field select {
+          width: 100%; padding: 8px 12px;
+          border: 1px solid rgba(128,128,128,0.25);
+          border-radius: 8px;
+          background: var(--card-background-color, #1e1e2e);
+          color: var(--primary-text-color);
+          font-size: 0.85rem;
+          font-family: inherit;
+          outline: none;
+          transition: border-color 0.2s;
+        }
+        .field input:focus, .field select:focus {
+          border-color: var(--primary-color, #03a9f4);
+        }
+        .field input[type="color"] {
+          width: 100%; height: 36px; padding: 2px 4px;
+          border: 1px solid rgba(128,128,128,0.25);
+          border-radius: 8px; cursor: pointer;
+          background: var(--card-background-color, #1e1e2e);
+        }
         ha-entity-picker { width: 100%; }
+
+        /* ── Layout helpers ── */
         .row { display: flex; gap: 10px; }
-        .row > * { flex: 1; }
+        .row > * { flex: 1; min-width: 0; }
+        .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+        /* ── Chip toggle ── */
         .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
         .chip {
           padding: 5px 12px; border-radius: 8px; font-size: 0.72rem; font-weight: 700;
           cursor: pointer; border: 1px solid rgba(128,128,128,0.2);
-          background: rgba(128,128,128,0.06); transition: all 0.2s;
-          text-transform: none; letter-spacing: 0.5px;
+          background: rgba(128,128,128,0.06); transition: all 0.2s; user-select: none;
         }
-        .chip.active { background: var(--primary-color, #03a9f4); color: white; border-color: transparent; }
-        .switch-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
-        .switch-label { font-size: 0.8rem; font-weight: 600; }
+        .chip:hover { border-color: var(--primary-color, #03a9f4); }
+        .chip.active {
+          background: var(--primary-color, #03a9f4);
+          color: white; border-color: transparent;
+        }
+
+        /* ── Switch row ── */
+        .switch-row {
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 6px 0; border-bottom: 1px solid rgba(128,128,128,0.08);
+        }
+        .switch-row:last-child { border-bottom: none; }
+        .switch-label { font-size: 0.82rem; font-weight: 600; }
+        .switch-hint { font-size: 0.68rem; color: var(--secondary-text-color); margin-top: 1px; }
+
+        /* ── Sub-group heading inside section ── */
+        .sub-heading {
+          font-size: 0.7rem; font-weight: 800; letter-spacing: 1px;
+          color: var(--primary-color, #03a9f4); opacity: 0.8;
+          padding-top: 6px; border-top: 1px solid rgba(128,128,128,0.1);
+          text-transform: uppercase;
+        }
       </style>
 
       <div class="editor">
 
-        <!-- General -->
+        <!-- ── General ── -->
         <details open>
           <summary><ha-icon icon="mdi:cog"></ha-icon> Allgemein</summary>
           <div class="section">
-            <div class="field">
-              <label>Titel</label>
-              <input type="text" id="ed-title" value="${c.title}">
-            </div>
-            <div class="field">
-              <label>Titel Icon</label>
-              <input type="text" id="ed-title-icon" value="${c.title_icon}">
+            <div class="row">
+              <div class="field">
+                <label>Titel</label>
+                <input type="text" id="ed-title" value="${c.title}">
+              </div>
+              <div class="field">
+                <label>Titel Icon (mdi:...)</label>
+                <input type="text" id="ed-title-icon" value="${c.title_icon}">
+              </div>
             </div>
           </div>
         </details>
 
-        <!-- Visible Tabs -->
+        <!-- ── Visible Tabs ── -->
         <details>
           <summary><ha-icon icon="mdi:tab"></ha-icon> Sichtbare Tabs</summary>
           <div class="section">
@@ -1124,59 +1284,217 @@ class BuderusMonitorCardEditor extends HTMLElement {
           </div>
         </details>
 
-        <!-- Entities per section -->
-        ${this._renderEntitySections()}
-
-        <!-- Style -->
+        <!-- ── Typography ── -->
         <details>
-          <summary><ha-icon icon="mdi:palette"></ha-icon> Design & Styling</summary>
+          <summary><ha-icon icon="mdi:format-font"></ha-icon> Typografie & Titel</summary>
+          <div class="section">
+            <div class="field">
+              <label>Schriftart (CSS font-family)</label>
+              <input type="text" id="ed-font-family" value="${s.font_family}">
+            </div>
+            <div class="row">
+              <div class="field">
+                <label>Titel Schriftgröße</label>
+                <input type="text" id="ed-title-font-size" value="${s.title_font_size}">
+              </div>
+              <div class="field">
+                <label>Titel Schriftstärke</label>
+                <input type="text" id="ed-title-font-weight" value="${s.title_font_weight}">
+              </div>
+            </div>
+            <div class="row">
+              <div class="field">
+                <label>Titel Farbe</label>
+                <input type="color" id="ed-title-color" value="${s.title_color.startsWith('var') ? '#e0e0e0' : s.title_color}">
+              </div>
+              <div class="field">
+                <label>Titel Buchstabenabstand</label>
+                <input type="text" id="ed-title-letter-spacing" value="${s.title_letter_spacing}">
+              </div>
+            </div>
+            <div class="sub-heading">Metriken</div>
+            <div class="row">
+              <div class="field">
+                <label>Wert Schriftgröße</label>
+                <input type="text" id="ed-val-size" value="${s.metric_value_size}">
+              </div>
+              <div class="field">
+                <label>Wert Schriftstärke</label>
+                <input type="text" id="ed-val-weight" value="${s.metric_value_weight}">
+              </div>
+            </div>
+            <div class="row">
+              <div class="field">
+                <label>Label Schriftgröße</label>
+                <input type="text" id="ed-lbl-size" value="${s.metric_label_size}">
+              </div>
+              <div class="field">
+                <label>Label Schriftstärke</label>
+                <input type="text" id="ed-lbl-weight" value="${s.metric_label_weight}">
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- ── Colors ── -->
+        <details>
+          <summary><ha-icon icon="mdi:palette"></ha-icon> Farben</summary>
           <div class="section">
             <div class="row">
               <div class="field"><label>Akzentfarbe</label><input type="color" id="ed-accent" value="${s.accent}"></div>
               <div class="field"><label>Akzent Sekundär</label><input type="color" id="ed-accent2" value="${s.accent_secondary}"></div>
             </div>
-            <div class="row">
-              <div class="field"><label>Farbe Heizen</label><input type="color" id="ed-c-heat" value="${s.color_heating}"></div>
-              <div class="field"><label>Farbe WW</label><input type="color" id="ed-c-dhw" value="${s.color_dhw}"></div>
-              <div class="field"><label>Farbe Idle</label><input type="color" id="ed-c-idle" value="${s.color_idle}"></div>
+            <div class="row-3">
+              <div class="field"><label>Heizen</label><input type="color" id="ed-c-heat" value="${s.color_heating}"></div>
+              <div class="field"><label>Warmwasser</label><input type="color" id="ed-c-dhw" value="${s.color_dhw}"></div>
+              <div class="field"><label>Kühlen</label><input type="color" id="ed-c-cool" value="${s.color_cooling}"></div>
             </div>
             <div class="row">
-              <div class="field"><label>Graph Stunden</label><input type="number" id="ed-graph-hours" value="${s.graph_hours}" min="1" max="168"></div>
-              <div class="field"><label>Graph Deckkraft</label><input type="number" id="ed-graph-opacity" value="${s.graph_opacity}" min="0" max="1" step="0.05"></div>
+              <div class="field"><label>Standby / OK</label><input type="color" id="ed-c-idle" value="${s.color_idle}"></div>
+              <div class="field"><label>Fehler</label><input type="color" id="ed-c-error" value="${s.color_error}"></div>
             </div>
+            <div class="sub-heading">Kacheln</div>
+            <div class="field"><label>Kachel Hintergrundfarbe (CSS)</label><input type="text" id="ed-metric-box-bg" value="${s.metric_box_bg}"></div>
             <div class="row">
-              <div class="field"><label>Wert-Schriftgröße</label><input type="text" id="ed-val-size" value="${s.metric_value_size}"></div>
-              <div class="field"><label>Label-Schriftgröße</label><input type="text" id="ed-lbl-size" value="${s.metric_label_size}"></div>
+              <div class="field"><label>Wert Farbe (CSS)</label><input type="text" id="ed-metric-value-color" value="${s.metric_value_color}"></div>
+              <div class="field"><label>Label Farbe (CSS)</label><input type="text" id="ed-metric-label-color" value="${s.metric_label_color}"></div>
             </div>
-            <div class="row">
-              <div class="field"><label>Kartenradius</label><input type="text" id="ed-radius" value="${s.card_radius}"></div>
-              <div class="field"><label>Karten-Padding</label><input type="text" id="ed-padding" value="${s.card_padding}"></div>
-            </div>
-            <div class="field"><label>Karten-Hintergrund</label><input type="text" id="ed-bg" value="${s.card_bg}"></div>
+          </div>
+        </details>
+
+        <!-- ── Layout ── -->
+        <details>
+          <summary><ha-icon icon="mdi:view-grid"></ha-icon> Layout & Karte</summary>
+          <div class="section">
             <div class="row">
               <div class="field"><label>Spalten Hero</label><input type="number" id="ed-cols-hero" value="${s.columns_hero}" min="1" max="6"></div>
               <div class="field"><label>Spalten Detail</label><input type="number" id="ed-cols-detail" value="${s.columns_detail}" min="1" max="6"></div>
             </div>
-            <div class="field"><label>Graph Linienbreite</label><input type="number" id="ed-graph-lw" value="${s.graph_line_width}" min="1" max="8"></div>
+            <div class="row">
+              <div class="field"><label>Karten-Radius</label><input type="text" id="ed-radius" value="${s.card_radius}"></div>
+              <div class="field"><label>Karten-Padding</label><input type="text" id="ed-padding" value="${s.card_padding}"></div>
+            </div>
+            <div class="field"><label>Karten-Hintergrund (CSS)</label><input type="text" id="ed-bg" value="${s.card_bg}"></div>
+            <div class="row">
+              <div class="field"><label>Kachel Radius</label><input type="text" id="ed-metric-box-radius" value="${s.metric_box_radius}"></div>
+              <div class="field"><label>Kachel Padding</label><input type="text" id="ed-metric-box-padding" value="${s.metric_box_padding}"></div>
+            </div>
+            <div class="field"><label>Kachel Min-Höhe</label><input type="text" id="ed-metric-min-height" value="${s.metric_min_height}"></div>
+            <div class="field"><label>Kachel Rahmen (CSS border)</label><input type="text" id="ed-metric-box-border" value="${s.metric_box_border}"></div>
+          </div>
+        </details>
 
+        <!-- ── Tabs Style ── -->
+        <details>
+          <summary><ha-icon icon="mdi:tab"></ha-icon> Tab-Stil</summary>
+          <div class="section">
+            <div class="field">
+              <label>Tab-Stil</label>
+              <select id="ed-tab-style">
+                <option value="pills" ${s.tab_style === "pills" ? "selected" : ""}>Pills (Standard)</option>
+                <option value="underline" ${s.tab_style === "underline" ? "selected" : ""}>Unterstrichen</option>
+                <option value="minimal" ${s.tab_style === "minimal" ? "selected" : ""}>Minimal</option>
+              </select>
+            </div>
+            <div class="row">
+              <div class="field"><label>Tab Hintergrund (CSS)</label><input type="text" id="ed-tab-bg" value="${s.tab_bg}"></div>
+              <div class="field"><label>Aktiver Tab Hintergrund (CSS)</label><input type="text" id="ed-tab-active-bg" value="${s.tab_active_bg}"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label>Tab Radius</label><input type="text" id="ed-tab-radius" value="${s.tab_border_radius}"></div>
+              <div class="field"><label>Tab Abstand</label><input type="text" id="ed-tab-gap" value="${s.tab_gap}"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label>Tab Schriftgröße</label><input type="text" id="ed-tab-font-size" value="${s.tab_font_size}"></div>
+              <div class="field"><label>Tab Schriftstärke</label><input type="text" id="ed-tab-font-weight" value="${s.tab_font_weight}"></div>
+            </div>
+          </div>
+        </details>
+
+        <!-- ── Status Bar ── -->
+        <details>
+          <summary><ha-icon icon="mdi:information-outline"></ha-icon> Statusleiste</summary>
+          <div class="section">
+            <div class="row">
+              <div class="field"><label>Pill Hintergrund (CSS)</label><input type="text" id="ed-status-pill-bg" value="${s.status_pill_bg}"></div>
+              <div class="field"><label>Pill Rahmen (CSS)</label><input type="text" id="ed-status-pill-border" value="${s.status_pill_border}"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label>Pill Radius</label><input type="text" id="ed-status-pill-radius" value="${s.status_pill_radius}"></div>
+              <div class="field"><label>Pill Schriftgröße</label><input type="text" id="ed-status-pill-font-size" value="${s.status_pill_font_size}"></div>
+            </div>
+          </div>
+        </details>
+
+        <!-- ── Graphs ── -->
+        <details>
+          <summary><ha-icon icon="mdi:chart-line"></ha-icon> Graphen</summary>
+          <div class="section">
+            <div class="row">
+              <div class="field"><label>Stunden anzeigen</label><input type="number" id="ed-graph-hours" value="${s.graph_hours}" min="1" max="168"></div>
+              <div class="field"><label>Linienbreite</label><input type="number" id="ed-graph-lw" value="${s.graph_line_width}" min="1" max="8"></div>
+            </div>
+            <div class="field"><label>Deckkraft (0–1)</label><input type="number" id="ed-graph-opacity" value="${s.graph_opacity}" min="0" max="1" step="0.05"></div>
             <div class="switch-row">
-              <span class="switch-label">Header anzeigen</span>
+              <div><div class="switch-label">Graphen in Detail-Tabs</div><div class="switch-hint">Mini-Graphen in allen Tabs anzeigen (nicht nur Dashboard)</div></div>
+              <ha-switch id="ed-graphs-detail" ${s.graphs_in_detail_tabs ? "checked" : ""}></ha-switch>
+            </div>
+            <div class="switch-row">
+              <div><div class="switch-label">Graph Füllung</div><div class="switch-hint">Fläche unter der Linie füllen</div></div>
+              <ha-switch id="ed-graph-fill" ${s.graph_fill !== false ? "checked" : ""}></ha-switch>
+            </div>
+            <div class="switch-row">
+              <div><div class="switch-label">Extremwerte anzeigen</div></div>
+              <ha-switch id="ed-graph-extrema" ${s.graph_extrema ? "checked" : ""}></ha-switch>
+            </div>
+            <div class="switch-row">
+              <div><div class="switch-label">Datenpunkte anzeigen</div></div>
+              <ha-switch id="ed-graph-points" ${s.graph_points ? "checked" : ""}></ha-switch>
+            </div>
+          </div>
+        </details>
+
+        <!-- ── Controls Style ── -->
+        <details>
+          <summary><ha-icon icon="mdi:tune"></ha-icon> Steuerzeilen-Stil</summary>
+          <div class="section">
+            <div class="field"><label>Zeile Hintergrund (CSS)</label><input type="text" id="ed-ctrl-row-bg" value="${s.control_row_bg}"></div>
+            <div class="row">
+              <div class="field"><label>Zeile Rahmen (CSS)</label><input type="text" id="ed-ctrl-row-border" value="${s.control_row_border}"></div>
+              <div class="field"><label>Zeile Radius</label><input type="text" id="ed-ctrl-row-radius" value="${s.control_row_radius}"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label>Divider Farbe (CSS)</label><input type="text" id="ed-divider-color" value="${s.section_divider_color}"></div>
+              <div class="field"><label>Divider Schriftgröße</label><input type="text" id="ed-divider-size" value="${s.section_divider_size}"></div>
+            </div>
+          </div>
+        </details>
+
+        <!-- ── Feature Switches ── -->
+        <details>
+          <summary><ha-icon icon="mdi:toggle-switch"></ha-icon> Funktionen</summary>
+          <div class="section">
+            <div class="switch-row">
+              <div><div class="switch-label">Header anzeigen</div></div>
               <ha-switch id="ed-show-header" ${s.show_header ? "checked" : ""}></ha-switch>
             </div>
             <div class="switch-row">
-              <span class="switch-label">COP anzeigen</span>
+              <div><div class="switch-label">COP anzeigen</div><div class="switch-hint">Effizienzanzeige auf dem Dashboard</div></div>
               <ha-switch id="ed-show-cop" ${s.show_cop ? "checked" : ""}></ha-switch>
             </div>
             <div class="switch-row">
-              <span class="switch-label">Statusleiste</span>
+              <div><div class="switch-label">Statusleiste</div></div>
               <ha-switch id="ed-show-status" ${s.show_status_bar ? "checked" : ""}></ha-switch>
             </div>
             <div class="switch-row">
-              <span class="switch-label">Animationen</span>
+              <div><div class="switch-label">Animationen</div><div class="switch-hint">Einblendeffekte und pulsierende Punkte</div></div>
               <ha-switch id="ed-animate" ${s.animate ? "checked" : ""}></ha-switch>
             </div>
           </div>
         </details>
+
+        <!-- ── Entity Groups ── -->
+        ${this._renderEntitySections()}
       </div>
     `;
 
@@ -1228,7 +1546,7 @@ class BuderusMonitorCardEditor extends HTMLElement {
   _attachEditorListeners() {
     const $ = (id) => this.shadowRoot.getElementById(id);
 
-    // Simple inputs
+    // Simple text inputs → config root
     const simpleMap = {
       "ed-title": (v) => { this._config.title = v; },
       "ed-title-icon": (v) => { this._config.title_icon = v; },
@@ -1238,30 +1556,86 @@ class BuderusMonitorCardEditor extends HTMLElement {
       if (el) el.addEventListener("input", (e) => { fn(e.target.value); this._fire(); });
     }
 
-    // Style inputs
-    const styleMap = {
-      "ed-accent": "accent", "ed-accent2": "accent_secondary",
-      "ed-c-heat": "color_heating", "ed-c-dhw": "color_dhw", "ed-c-idle": "color_idle",
-      "ed-graph-hours": "graph_hours", "ed-graph-opacity": "graph_opacity",
-      "ed-val-size": "metric_value_size", "ed-lbl-size": "metric_label_size",
-      "ed-radius": "card_radius", "ed-padding": "card_padding", "ed-bg": "card_bg",
-      "ed-cols-hero": "columns_hero", "ed-cols-detail": "columns_detail",
+    // Style text/number inputs
+    const styleInputMap = {
+      "ed-font-family": "font_family",
+      "ed-title-font-size": "title_font_size",
+      "ed-title-font-weight": "title_font_weight",
+      "ed-title-letter-spacing": "title_letter_spacing",
+      "ed-accent": "accent",
+      "ed-accent2": "accent_secondary",
+      "ed-c-heat": "color_heating",
+      "ed-c-dhw": "color_dhw",
+      "ed-c-cool": "color_cooling",
+      "ed-c-idle": "color_idle",
+      "ed-c-error": "color_error",
+      "ed-metric-box-bg": "metric_box_bg",
+      "ed-metric-value-color": "metric_value_color",
+      "ed-metric-label-color": "metric_label_color",
+      "ed-graph-hours": "graph_hours",
+      "ed-graph-opacity": "graph_opacity",
+      "ed-val-size": "metric_value_size",
+      "ed-val-weight": "metric_value_weight",
+      "ed-lbl-size": "metric_label_size",
+      "ed-lbl-weight": "metric_label_weight",
+      "ed-radius": "card_radius",
+      "ed-padding": "card_padding",
+      "ed-bg": "card_bg",
+      "ed-cols-hero": "columns_hero",
+      "ed-cols-detail": "columns_detail",
       "ed-graph-lw": "graph_line_width",
+      "ed-tab-style": "tab_style",
+      "ed-tab-bg": "tab_bg",
+      "ed-tab-active-bg": "tab_active_bg",
+      "ed-tab-radius": "tab_border_radius",
+      "ed-tab-gap": "tab_gap",
+      "ed-tab-font-size": "tab_font_size",
+      "ed-tab-font-weight": "tab_font_weight",
+      "ed-status-pill-bg": "status_pill_bg",
+      "ed-status-pill-border": "status_pill_border",
+      "ed-status-pill-radius": "status_pill_radius",
+      "ed-status-pill-font-size": "status_pill_font_size",
+      "ed-ctrl-row-bg": "control_row_bg",
+      "ed-ctrl-row-border": "control_row_border",
+      "ed-ctrl-row-radius": "control_row_radius",
+      "ed-divider-color": "section_divider_color",
+      "ed-divider-size": "section_divider_size",
+      "ed-metric-box-radius": "metric_box_radius",
+      "ed-metric-box-padding": "metric_box_padding",
+      "ed-metric-box-border": "metric_box_border",
+      "ed-metric-min-height": "metric_min_height",
     };
-    for (const [id, key] of Object.entries(styleMap)) {
+    const numericKeys = new Set(["graph_hours", "columns_hero", "columns_detail", "graph_line_width"]);
+    for (const [id, key] of Object.entries(styleInputMap)) {
       const el = $(id);
-      if (el) el.addEventListener("input", (e) => {
-        let val = e.target.value;
-        if (["graph_hours", "columns_hero", "columns_detail", "graph_line_width"].includes(key)) val = parseInt(val) || 0;
-        this._config.style[key] = val;
-        this._fire();
-      });
+      if (el) {
+        const evt = (el.tagName === "SELECT") ? "change" : "input";
+        el.addEventListener(evt, (e) => {
+          let val = e.target.value;
+          if (numericKeys.has(key)) val = parseInt(val) || 0;
+          this._config.style[key] = val;
+          this._fire();
+        });
+      }
     }
 
-    // Switches
+    // Title color picker — special: raw color value
+    const titleColorEl = $("ed-title-color");
+    if (titleColorEl) titleColorEl.addEventListener("input", (e) => {
+      this._config.style.title_color = e.target.value;
+      this._fire();
+    });
+
+    // Boolean switches
     const switchMap = {
-      "ed-show-header": "show_header", "ed-show-cop": "show_cop",
-      "ed-show-status": "show_status_bar", "ed-animate": "animate",
+      "ed-show-header": "show_header",
+      "ed-show-cop": "show_cop",
+      "ed-show-status": "show_status_bar",
+      "ed-animate": "animate",
+      "ed-graphs-detail": "graphs_in_detail_tabs",
+      "ed-graph-fill": "graph_fill",
+      "ed-graph-extrema": "graph_extrema",
+      "ed-graph-points": "graph_points",
     };
     for (const [id, key] of Object.entries(switchMap)) {
       const el = $(id);
@@ -1278,8 +1652,8 @@ class BuderusMonitorCardEditor extends HTMLElement {
         const idx = this._config.visible_tabs.indexOf(tab);
         if (idx >= 0) this._config.visible_tabs.splice(idx, 1);
         else this._config.visible_tabs.push(tab);
+        chip.classList.toggle("active");
         this._fire();
-        this._render();
       });
     });
 
